@@ -1,17 +1,19 @@
 package main
 
 import (
-	"os"
-	"fmt"
-	"log"
+	"context"
 	"flag"
-	"time"
-	"strings"
+	"fmt"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"log"
 	"net/url"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pkg/errors"
 )
 
@@ -26,28 +28,56 @@ type S3Object struct {
 	Key    string
 }
 
-func (s *S3ObjectSigner) Presign() (*url.URL, error) {
-	awsSession, err := session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	})
+func (s *S3ObjectSigner) Presign(ctx context.Context) (*string, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	s3c := s3.New(awsSession)
+	s3Client := s3.NewFromConfig(cfg)
+	presignClient := s3.NewPresignClient(s3Client)
+	var presignRequest *v4.PresignedHTTPRequest
+	switch s.HTTPMethod {
+	case "HEAD":
+		input := s3.HeadObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)}
+		r, err := presignClient.PresignHeadObject(ctx, &input)
+		if err != nil {
+			return nil, err
+		}
+		presignRequest = r
 
-	op := &request.Operation{
-		Name:       "Presign",
-		HTTPMethod: s.HTTPMethod,
-		HTTPPath:   "/{Bucket}/{Key+}",
+	case "GET":
+		input := s3.GetObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)}
+		r, err := presignClient.PresignGetObject(ctx, &input)
+		if err != nil {
+			return nil, err
+		}
+		presignRequest = r
+
+	case "PUT":
+		input := s3.PutObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)}
+		r, err := presignClient.PresignPutObject(ctx, &input)
+		if err != nil {
+			return nil, err
+		}
+		presignRequest = r
+
+	case "DELETE":
+		input := s3.DeleteObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)}
+		r, err := presignClient.PresignDeleteObject(ctx, &input)
+		if err != nil {
+			return nil, err
+		}
+		presignRequest = r
+
+	default:
+		return nil, fmt.Errorf("unssuported method: %s", s.HTTPMethod)
 	}
 
-	in := &s3.PutObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)}
-	var out interface{}
-	r := s3c.NewRequest(op, in, out)
-	r.Presign(s.Expire)
-
-	return r.HTTPRequest.URL, nil
+	return &presignRequest.URL, nil
 }
 
 func (s *S3Object) NewSigner(httpMethod string, expire time.Duration) *S3ObjectSigner {
@@ -61,9 +91,11 @@ func parseS3Url(s3url string) (*S3Object, error) {
 	}
 
 	if u.Scheme == "s3" {
-		return &S3Object{Bucket: u.Hostname(), Key: u.Path}, nil
+		log.Printf("bucket: %s", u.Hostname())
+		log.Printf("path: %s", u.Path)
+		key := strings.TrimLeft(u.Path, "/")
+		return &S3Object{Bucket: u.Hostname(), Key: key}, nil
 	} else {
-
 		if strings.HasPrefix(u.Hostname(), "s3-") {
 			parts := strings.SplitN(u.Path, "/", 2)
 			if parts == nil || len(parts) != 2 {
@@ -81,7 +113,7 @@ func parse() (*S3ObjectSigner, error) {
 	var expire time.Duration
 
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: presign [options] (bucket key|object_url)")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: presign [options] (bucket key|object_url)")
 		flag.PrintDefaults()
 	}
 
@@ -114,9 +146,9 @@ func main() {
 		log.Fatalf("%+v\n", err)
 	}
 
-	url, err := signer.Presign()
+	signedUrl, err := signer.Presign(context.Background())
 	if err != nil {
 		log.Fatalf("%+v\n", err)
 	}
-	fmt.Printf("%s\n", url.String())
+	fmt.Printf("%s\n", *signedUrl)
 }
