@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"log"
 	"net/url"
 	"os"
@@ -12,9 +11,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/pkg/errors"
+	"golang.org/x/xerrors"
 )
 
 type S3ObjectSigner struct {
@@ -99,11 +99,11 @@ func parseS3Url(s3url string) (*S3Object, error) {
 		if strings.HasPrefix(u.Hostname(), "s3-") {
 			parts := strings.SplitN(u.Path, "/", 2)
 			if parts == nil || len(parts) != 2 {
-				return nil, errors.WithStack(fmt.Errorf("invalid url: %v", u))
+				return nil, xerrors.Errorf("invalid url: %v", u)
 			}
 			return &S3Object{Bucket: parts[0], Key: parts[1]}, nil
 		} else {
-			return nil, errors.WithStack(fmt.Errorf("invalid url: %v", u))
+			return nil, xerrors.Errorf("invalid url: %v", u)
 		}
 	}
 }
